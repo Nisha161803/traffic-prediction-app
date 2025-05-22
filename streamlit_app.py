@@ -5,34 +5,30 @@ import joblib
 from tensorflow.keras.models import load_model
 import matplotlib.pyplot as plt
 import io
-import tensorflow as tf
-import pandas as pd
-import sklearn
-import joblib
-import matplotlib
-import numpy
-print(tf.__version__)
-print(pd.__version__)
-print(sklearn.__version__)
-print(joblib.__version__)
-print(matplotlib.__version__)
-print(numpy.__version__)
 
-# Load scalers and model
-scaler_X = joblib.load('scaler_X.pkl')
-scaler_y = joblib.load('scaler_y.pkl')
-model = load_model('traffic_model.keras')
+@st.cache_resource(show_spinner=True)
+def load_scalers_and_model():
+    scaler_X = joblib.load('scaler_X.pkl')
+    scaler_y = joblib.load('scaler_y.pkl')
+    model = load_model('traffic_model.keras')
+    return scaler_X, scaler_y, model
 
-# Load dataset for dropdowns
-df = pd.read_csv('Traffic_Volume_Counts_20250108.csv')
-df.columns = df.columns.str.strip()
-df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-df['Year'] = df['Date'].dt.year
-df['Month'] = df['Date'].dt.month
-df['Day'] = df['Date'].dt.day
+@st.cache_data(show_spinner=True)
+def load_data():
+    df = pd.read_csv('Traffic_Volume_Counts_20250108.csv')
+    df.columns = df.columns.str.strip()
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df['Year'] = df['Date'].dt.year
+    df['Month'] = df['Date'].dt.month
+    df['Day'] = df['Date'].dt.day
+    return df
+
+# Load models and data once
+scaler_X, scaler_y, model = load_scalers_and_model()
+df = load_data()
+
 time_slot_cols = [col for col in df.columns if '-' in col and ('AM' in col or 'PM' in col)]
 
-# UI
 st.title("🚦 Traffic Volume Prediction")
 
 date = st.date_input("📅 Date")
@@ -55,7 +51,7 @@ if st.button("📊 Predict 1-Hour Ahead and Show Graph"):
         input_data.at[0, 'Month'] = date.month
         input_data.at[0, 'Day'] = date.day
 
-        # One-hot fields
+        # One-hot encoded fields
         one_hot_fields = {
             'Direction': direction,
             'Roadway Name': roadway,
@@ -75,24 +71,27 @@ if st.button("📊 Predict 1-Hour Ahead and Show Graph"):
             y_pred_scaled = model.predict(X_scaled)
             y_pred = scaler_y.inverse_transform(y_pred_scaled)
             predictions[time_slot] = y_pred[0][0]
-        except:
+        except Exception as e:
+            st.warning(f"Prediction failed for {time_slot}: {e}")
             predictions[time_slot] = np.nan
 
     # Show result for selected slot
-    if selected_slot in predictions:
+    if selected_slot in predictions and not np.isnan(predictions[selected_slot]):
         st.success(f"📈 Predicted Traffic Volume at {selected_slot}: {int(predictions[selected_slot])} vehicles")
+    else:
+        st.error("Prediction not available for the selected time slot.")
 
-    # Convert to DataFrame for chart + CSV
+    # DataFrame for plotting and download
     pred_df = pd.DataFrame({
         'Time Slot': list(predictions.keys()),
         'Predicted Traffic Volume': list(predictions.values())
     })
 
-    # Plot graph
     st.subheader("📊 Predicted Traffic Volume for All Time Slots")
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(pred_df['Time Slot'], pred_df['Predicted Traffic Volume'], marker='o', label='Predicted Volume', color='skyblue')
-    if selected_slot in predictions:
+
+    if selected_slot in predictions and not np.isnan(predictions[selected_slot]):
         idx = list(predictions.keys()).index(selected_slot)
         ax.plot(pred_df['Time Slot'][idx], pred_df['Predicted Traffic Volume'][idx], marker='o', color='red', label='Selected Slot')
 
@@ -115,7 +114,7 @@ if st.button("📊 Predict 1-Hour Ahead and Show Graph"):
         mime="image/png"
     )
 
-    # Download CSV
+    # Download CSV of predictions
     csv = pred_df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="📄 Download Predictions as CSV",
@@ -123,4 +122,3 @@ if st.button("📊 Predict 1-Hour Ahead and Show Graph"):
         file_name=f"traffic_predictions_{date}.csv",
         mime='text/csv'
     )
-
